@@ -1,71 +1,84 @@
 apiVersion: tekton.dev/v1beta1
 kind: Pipeline
 metadata:  
-  name: hello-pipeline
-spec:
-  params:
-    - name: message
-  tasks:
-    - name: hello
-      taskRef:
-        name: echo
-      params:
-      - name: message
-        value: "$(params.message)"
----
-apiVersion: tekton.dev/v1beta1
-kind: Pipeline
-metadata:  
   name: cd-pipeline
 spec:
+  workspaces:
+    - name: pipeline-workspace
   params:
+    - name: app-name
+    - name: build-image
     - name: repo-url
     - name: branch
-      default: "master"
-
-
+      default: master
   tasks:
-    - name: clone
-      taskRef: 
-        name: checkout
-      params:
-      - name: repo-url
-        value: "$(params.repo-url)"
-      - name: branch
-        value: "$(params.branch)"
-      
-    - name: lint
+    - name: init
+      workspaces:
+        - name: source
+          workspace: pipeline-workspace          
       taskRef:
-        name: echo
+        name: cleanup
+
+    - name: clone
+      workspaces:
+        - name: output
+          workspace: pipeline-workspace          
+      taskRef:
+        name: git-clone
       params:
-      - name: message
-        value: "callng flake8 linter..."
+      - name: url
+        value: $(params.repo-url)
+      - name: revision
+        value: $(params.branch)
+      runAfter:
+        - init      
+
+    - name: lint
+      workspaces:
+        - name: source
+          workspace: pipeline-workspace          
+      taskRef:
+        name: flake8
+      params:
+      - name: image
+        value: "python:3.9-slim"
+      - name: args
+        value: ["--count","--max-complexity=10","--max-line-length=127","--statistics"]
       runAfter:
         - clone
 
     - name: tests
+      workspaces:
+        - name: source
+          workspace: pipeline-workspace          
       taskRef:
-        name: echo
+        name: nose
       params:
-      - name: message
-        value: "Running unit tests with PyUnit..."
+      - name: args
+        value: "-v --with-spec --spec-color"
       runAfter:
         - lint
 
     - name: build
+      workspaces:
+        - name: source
+          workspace: pipeline-workspace          
       taskRef:
-        name: echo
+        name: buildah
+        kind: ClusterTask
       params:
-      - name: message
-        value: "Building image for $(params.repo-url) …"
+      - name: IMAGE
+        value: "$(params.build-image)"
       runAfter:
         - tests
 
     - name: deploy
       taskRef:
-        name: echo
+        name: openshift-client
+        kind: ClusterTask
       params:
-      - name: message
-        value: "Deploying $(params.branch) branch of $(params.repo-url) …"
+      - name: SCRIPT
+        value: "oc create deploy $(params.app-name) --image=$(params.build-image)"
       runAfter:
         - build
+
